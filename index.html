@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a"><meta name="mobile-web-app-capable" content="yes">
+<title>Earnings Reactions</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--fg:#e2e8f0;--mut:#94a3b8;--acc:#38bdf8;--up:#22c55e;--dn:#ef4444;--warn:#f59e0b}
+*{box-sizing:border-box}body{margin:0;font:15px/1.4 system-ui,-apple-system,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:760px;margin:auto;padding:14px 12px 40px}h1{font-size:20px;margin:4px 0 10px}
+form{display:flex;gap:8px}input{flex:1;min-width:0;font-size:18px;padding:12px;border-radius:10px;border:1px solid #334155;background:#0b1222;color:var(--fg);text-transform:uppercase}
+button{font-size:16px;padding:12px 16px;border-radius:10px;border:0;background:var(--acc);color:#04263a;font-weight:700}
+button:disabled{opacity:.5}.chips{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}.chips button{background:#334155;color:var(--fg);padding:6px 12px;font-weight:500;font-size:14px}
+.card{background:var(--card);border-radius:12px;padding:12px;margin-top:12px}.mut{color:var(--mut);font-size:13px}
+.err{background:#3b1d1d;border:1px solid var(--dn);color:#fecaca}.warnbox{background:#3a2c0b;border:1px solid var(--warn);color:#fde68a}
+svg{width:100%;height:auto;display:block;touch-action:pan-y}.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.lg{display:flex;align-items:center;gap:6px;background:#0b1222;border-radius:16px;padding:4px 10px;font-size:13px;cursor:pointer;user-select:none}.lg.off{opacity:.35}
+.sw{width:12px;height:12px;border-radius:50%}table{width:100%;border-collapse:collapse;font-size:12.5px}th,td{padding:6px 3px;text-align:right;border-bottom:1px solid #334155;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}.up{color:var(--up)}.dn{color:var(--dn)}.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:8px;background:#334155;margin-left:4px}
+.tag.inf{background:var(--warn);color:#1f1300;font-weight:700}.scroll{overflow-x:auto}.spin{display:inline-block;width:16px;height:16px;border:2px solid var(--mut);border-top-color:var(--acc);border-radius:50%;animation:s 1s linear infinite;vertical-align:middle;margin-right:6px}@keyframes s{to{transform:rotate(1turn)}}
+</style></head><body><main>
+<h1>📈 Earnings price reactions</h1>
+<form id="f"><input id="t" placeholder="Ticker, e.g. AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="15"><button id="go">Go</button></form>
+<div class="chips" id="chips"></div>
+<div id="out"><div class="card mut">Type a ticker to see how the price moved around its last 5 earnings releases. Lines are indexed to 100 = last close before the reaction. Day 0 = first trading session after the release.</div></div>
+</main>
+<script>
+const COLORS=["#38bdf8","#f472b6","#a3e635","#fbbf24","#c084fc","#fb923c"];
+const $=s=>document.querySelector(s), out=$("#out");
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct=v=>v==null?'<span class="mut">–</span>':`<span class="${v>=0?"up":"dn"}">${v>0?"+":""}${v.toFixed(1)}%</span>`;
+let hidden=new Set(), data=null;
+function recent(){try{return JSON.parse(localStorage.getItem("recent")||"[]")}catch(e){return[]}}
+function drawChips(){const r=[...new Set([...recent(),"NOK","FEMY","AAPL"])].slice(0,8);
+ $("#chips").innerHTML=r.map(t=>`<button type="button" data-t="${esc(t)}">${esc(t)}</button>`).join("");
+ $("#chips").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("#t").value=b.dataset.t;load(b.dataset.t)});}
+async function load(tk){
+ tk=tk.trim().toUpperCase(); if(!tk)return;
+ if(!/^[A-Z0-9][A-Z0-9.\-^=]{0,14}$/.test(tk)){out.innerHTML=`<div class="card err">“${esc(tk)}” doesn't look like a ticker. Try something like AAPL or BRK-B.</div>`;return}
+ $("#go").disabled=true; out.innerHTML=`<div class="card"><span class="spin"></span>Pulling ${esc(tk)} from Yahoo… (first load can take ~5–15 s)</div>`;
+ const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),60000);
+ try{
+  const r=await fetch(`/api/earnings?ticker=${encodeURIComponent(tk)}${new URLSearchParams(location.search).get("infer")==="1"?"&infer=1":""}`,{signal:ctl.signal});
+  let j; try{j=await r.json()}catch(e){throw new Error(`Server returned an unexpected response (HTTP ${r.status}).`)}
+  if(!r.ok) throw new Error(j.message||`Request failed (HTTP ${r.status}).`);
+  data=j; hidden=new Set(); render();
+  const rc=[tk,...recent().filter(x=>x!==tk)].slice(0,5); localStorage.setItem("recent",JSON.stringify(rc)); drawChips();
+  history.replaceState(null,"","?t="+encodeURIComponent(tk));
+ }catch(e){
+  const msg=e.name==="AbortError"?"Timed out waiting for Yahoo. Try again.":(e.message==="Failed to fetch"?"Can't reach the server. Check your connection, or the link may have expired.":e.message);
+  out.innerHTML=`<div class="card err"><b>Couldn't load ${esc(tk)}.</b><br>${esc(msg)}</div>`;
+ }finally{clearTimeout(to);$("#go").disabled=false}
+}
+function render(){
+ const R=data.releases, inf=R.some(r=>r.timing_inferred);
+ let h=`<div class="card"><b>${esc(data.ticker)}</b> <span class="mut">· prices through ${esc(data.last_price_date)} · ${data.cached?"cached":"fresh"} data</span>
+  <div id="chart"></div><div class="legend" id="lg"></div>
+  <div class="mut" style="margin-top:6px">Tap the chart to read values. X = calendar days from day 0. Tap a legend chip to hide/show a line.</div></div>`;
+ if(inf) h+=`<div class="card warnbox">⚠️ Yahoo didn't give a release time for dates marked <span class="tag inf">INFERRED</span>. For those, day 0 was guessed by picking whichever session (release day vs. next day) moved more. Double-check them.</div>`;
+ h+=`<div class="card scroll"><table><tr><th>Release</th><th>Timing</th><th>Day 0</th><th>+1 td</th><th>+5 td</th><th>+21 td</th></tr>`;
+ R.slice().reverse().forEach(r=>{const i=R.indexOf(r);
+  h+=`<tr><td><span class="sw" style="display:inline-block;background:${COLORS[i]}"></span> ${esc(r.release_date)}<div class="mut">${esc(r.quarter)}${r.surprise_pct!=null?` · EPS surprise ${r.surprise_pct>0?"+":""}${r.surprise_pct}%`:""}</div></td>
+  <td>${esc(r.timing_label)}${r.timing_inferred?'<span class="tag inf">INFERRED</span>':(r.release_time_et?`<div class="mut">${esc(r.release_time_et)} ET</div>`:"")}</td>
+  <td>${pct(r.day0_pct)}<div class="mut">${esc(r.day0_date.slice(5))}</div></td><td>${pct(r.d1_pct)}</td><td>${pct(r.d5_pct)}</td><td>${pct(r.d21_pct)}</td></tr>`});
+ h+=`</table><div class="mut" style="margin-top:6px">% vs. base close (last close before the reaction). +1/+5/+21 td = close 1, 5 and 21 <b>trading days</b> after day 0 (21 td ≈ 1 month). Chart x-axis is still calendar days. Quarter = calendar quarter (approx.). Source: Yahoo Finance (unofficial).</div></div>`;
+ out.innerHTML=h; drawLegend(); drawChart();
+}
+function drawLegend(){const R=data.releases;
+ $("#lg").innerHTML=R.map((r,i)=>`<span class="lg ${hidden.has(i)?"off":""}" data-i="${i}"><span class="sw" style="background:${COLORS[i]}"></span>${esc(r.release_date)}${r.timing_inferred?" *":""}</span>`).join("");
+ $("#lg").querySelectorAll(".lg").forEach(e=>e.onclick=()=>{const i=+e.dataset.i;hidden.has(i)?hidden.delete(i):hidden.add(i);drawLegend();drawChart()});}
+function drawChart(sel){
+ const R=data.releases, W=400,H=300,m={l:34,r:8,t:10,b:38};
+ const series=R.map(r=>data.windows.filter(w=>w.earnings_date===r.release_date&&w.pct_change_from_close_before_release!=null).map(w=>({x:w.day_offset,y:100+w.pct_change_from_close_before_release,d:w.date,c:w.close})));
+ const vis=series.flatMap((s,i)=>hidden.has(i)?[]:s); const all=vis.length?vis:series.flat();
+ let x0=Math.min(...all.map(p=>p.x)),x1=Math.max(...all.map(p=>p.x)),y0=Math.min(100,...all.map(p=>p.y)),y1=Math.max(100,...all.map(p=>p.y));
+ const pad=(y1-y0)*.06||1; y0-=pad;y1+=pad;
+ const X=x=>m.l+(x-x0)/(x1-x0||1)*(W-m.l-m.r), Y=y=>m.t+(y1-y)/(y1-y0)*(H-m.t-m.b);
+ const step=[1,2,5,10,20,25,50,100,200].find(s=>(y1-y0)/s<=7)||500;
+ let g=`<svg viewBox="0 0 ${W} ${H}" id="svg">`;
+ for(let v=Math.ceil(y0/step)*step;v<=y1;v+=step) g+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${v===100?"#64748b":"#273449"}" ${v===100?'stroke-dasharray="4 3"':""}/><text x="${m.l-6}" y="${Y(v)+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v}</text>`;
+ for(let v=Math.ceil(x0/10)*10;v<=x1;v+=10) g+=`<text x="${X(v)}" y="${H-m.b+18}" fill="#94a3b8" font-size="11" text-anchor="middle">${v>0?"+":""}${v}</text>`;
+ g+=`<line x1="${X(0)}" x2="${X(0)}" y1="${m.t}" y2="${H-m.b}" stroke="#e2e8f0" stroke-width="1.5" stroke-dasharray="6 4"/><text x="${X(0)+4}" y="${m.t+12}" fill="#e2e8f0" font-size="11">day 0</text>`;
+ g+=`<text x="${(W+m.l)/2}" y="${H-4}" fill="#94a3b8" font-size="11" text-anchor="middle">calendar days from day 0</text>`;
+ series.forEach((s,i)=>{if(hidden.has(i)||!s.length)return;
+  g+=`<polyline fill="none" stroke="${COLORS[i]}" stroke-width="1.8" stroke-linejoin="round" ${R[i].timing_inferred?'stroke-dasharray="7 4"':""} points="${s.map(p=>X(p.x).toFixed(1)+","+Y(p.y).toFixed(1)).join(" ")}"/>`;
+  const z=s.find(p=>p.x===0); if(z) g+=`<circle cx="${X(0)}" cy="${Y(z.y)}" r="3.5" fill="${COLORS[i]}"/>`;});
+ if(sel!=null){g+=`<line x1="${X(sel)}" x2="${X(sel)}" y1="${m.t}" y2="${H-m.b}" stroke="#94a3b8"/>`;
+  const lines=[];series.forEach((s,i)=>{if(hidden.has(i))return;const p=s.filter(p=>p.x<=sel).pop();if(p){g+=`<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="4" fill="${COLORS[i]}" stroke="#fff"/>`;lines.push([i,p])}});
+  const bx=X(sel)>W/2?m.l+6:W-m.r-182, bh=22+lines.length*16;
+  g+=`<rect x="${bx}" y="${m.t+4}" width="178" height="${bh}" rx="6" fill="#0b1222" opacity=".92"/><text x="${bx+8}" y="${m.t+19}" fill="#e2e8f0" font-size="11">day ${sel>0?"+":""}${sel}</text>`;
+  lines.forEach(([i,p],k)=>g+=`<text x="${bx+8}" y="${m.t+35+k*16}" fill="${COLORS[i]}" font-size="11">${R[i].release_date}: ${(p.y-100>=0?"+":"")+(p.y-100).toFixed(1)}% ($${p.c})</text>`);}
+ g+=`</svg>`; $("#chart").innerHTML=g;
+ const svg=$("#svg"); svg.onclick=e=>{const b=svg.getBoundingClientRect(),px=(e.clientX-b.left)*W/b.width; if(px<m.l)return drawChart(); drawChart(Math.round(x0+(px-m.l)/(W-m.l-m.r)*(x1-x0)))};
+}
+$("#f").onsubmit=e=>{e.preventDefault();$("#t").blur();load($("#t").value)};
+drawChips(); const q=new URLSearchParams(location.search).get("t"); if(q){$("#t").value=q;load(q)}
+</script></body></html>
